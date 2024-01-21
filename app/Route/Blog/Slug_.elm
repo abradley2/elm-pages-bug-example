@@ -1,12 +1,19 @@
 module Route.Blog.Slug_ exposing (ActionData, Data, Model, Msg, route)
 
 import BackendTask exposing (BackendTask)
+import BackendTask.File
+import BackendTask.Glob
 import FatalError exposing (FatalError)
 import Head
 import Head.Seo as Seo
-import Html
+import Html exposing (Html)
+import Json.Decode as Decode
+import Markdown.Parser
+import Markdown.Renderer
 import Pages.Url
 import PagesMsg exposing (PagesMsg)
+import Parser exposing (Problem)
+import Parser.Advanced exposing (DeadEnd)
 import RouteBuilder exposing (App, StatelessRoute)
 import Shared
 import View exposing (View)
@@ -21,10 +28,15 @@ type alias Msg =
 
 
 type alias RouteParams =
-    { slug : String }
+    { slug : String
+    }
 
 
-route : StatelessRoute RouteParams Data ActionData
+type alias Data =
+    List (Html Msg)
+
+
+route : StatelessRoute RouteParams (List (Html Msg)) ActionData
 route =
     RouteBuilder.preRender
         { head = head
@@ -36,28 +48,62 @@ route =
 
 pages : BackendTask FatalError (List RouteParams)
 pages =
-    BackendTask.succeed
-        [ { slug = "hello" }
-        ]
-
-
-type alias Data =
-    { something : String
-    }
+    BackendTask.Glob.succeed RouteParams
+        |> BackendTask.Glob.match (BackendTask.Glob.literal "blog/")
+        |> BackendTask.Glob.capture BackendTask.Glob.wildcard
+        |> BackendTask.Glob.match (BackendTask.Glob.literal ".md")
+        |> BackendTask.Glob.toBackendTask
 
 
 type alias ActionData =
     {}
 
 
-data : RouteParams -> BackendTask FatalError Data
-data routeParams =
-    BackendTask.map Data
-        (BackendTask.succeed "Hi")
+data : RouteParams -> BackendTask FatalError (List (Html Msg))
+data params =
+    let
+        fullPath =
+            ""
+                ++ "blog/"
+                ++ params.slug
+                ++ ".md"
+
+        deadEndsToString : List (DeadEnd String Problem) -> String
+        deadEndsToString deadEnds =
+            deadEnds
+                |> List.map Markdown.Parser.deadEndToString
+                |> String.join "\n"
+    in
+    BackendTask.File.bodyWithFrontmatter
+        (\raw ->
+            let
+                parsed =
+                    Markdown.Parser.parse raw
+                        |> Result.mapError
+                            (\err ->
+                                "Could not parse markdown in: "
+                                    ++ fullPath
+                                    ++ "\n"
+                                    ++ deadEndsToString err
+                            )
+            in
+            case
+                Result.andThen
+                    (Markdown.Renderer.render Markdown.Renderer.defaultHtmlRenderer)
+                    parsed
+            of
+                Err err ->
+                    Decode.fail err
+
+                Ok pageview ->
+                    Decode.succeed pageview
+        )
+        fullPath
+        |> BackendTask.mapError (\err -> err.fatal)
 
 
 head :
-    App Data ActionData RouteParams
+    App (List (Html Msg)) ActionData RouteParams
     -> List Head.Tag
 head app =
     Seo.summary
@@ -77,10 +123,10 @@ head app =
 
 
 view :
-    App Data ActionData RouteParams
+    App (List (Html Msg)) ActionData RouteParams
     -> Shared.Model
     -> View (PagesMsg Msg)
 view app sharedModel =
     { title = "Placeholder - Blog.Slug_"
-    , body = [ Html.text "You're on the page Blog.Slug_" ]
+    , body = app.data |> List.map (Html.map PagesMsg.fromMsg)
     }
