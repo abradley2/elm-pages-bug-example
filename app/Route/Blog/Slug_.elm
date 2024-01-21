@@ -8,6 +8,7 @@ import Head
 import Head.Seo as Seo
 import Html exposing (Html)
 import Json.Decode as Decode
+import Markdown.Block exposing (Block)
 import Markdown.Parser
 import Markdown.Renderer
 import Pages.Url
@@ -33,10 +34,10 @@ type alias RouteParams =
 
 
 type alias Data =
-    List (Html Msg)
+    List Block
 
 
-route : StatelessRoute RouteParams (List (Html Msg)) ActionData
+route : StatelessRoute RouteParams Data ActionData
 route =
     RouteBuilder.preRender
         { head = head
@@ -59,7 +60,7 @@ type alias ActionData =
     {}
 
 
-data : RouteParams -> BackendTask FatalError (List (Html Msg))
+data : RouteParams -> BackendTask FatalError Data
 data params =
     let
         fullPath =
@@ -87,23 +88,19 @@ data params =
                                     ++ deadEndsToString err
                             )
             in
-            case
-                Result.andThen
-                    (Markdown.Renderer.render Markdown.Renderer.defaultHtmlRenderer)
-                    parsed
-            of
+            case parsed of
                 Err err ->
                     Decode.fail err
 
-                Ok pageview ->
-                    Decode.succeed pageview
+                Ok blocks ->
+                    Decode.succeed blocks
         )
         fullPath
         |> BackendTask.mapError (\err -> err.fatal)
 
 
 head :
-    App (List (Html Msg)) ActionData RouteParams
+    App Data ActionData RouteParams
     -> List Head.Tag
 head app =
     Seo.summary
@@ -123,10 +120,20 @@ head app =
 
 
 view :
-    App (List (Html Msg)) ActionData RouteParams
+    App Data ActionData RouteParams
     -> Shared.Model
     -> View (PagesMsg Msg)
 view app sharedModel =
     { title = "Placeholder - Blog.Slug_"
-    , body = app.data |> List.map (Html.map PagesMsg.fromMsg)
+    , body =
+        let
+            rendered =
+                Markdown.Renderer.render Markdown.Renderer.defaultHtmlRenderer app.data
+        in
+        case rendered of
+            Err err ->
+                [ Html.text err ]
+
+            Ok htmlBlocks ->
+                List.map (Html.map PagesMsg.fromMsg) htmlBlocks
     }
